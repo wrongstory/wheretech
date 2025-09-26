@@ -1,11 +1,8 @@
-// 주요 수정사항:
-// 1. 방 참여 후 다이얼로그가 사라지지 않는 문제 수정
-// 2. Y.js provider 상태 이벤트 리스너 개선
-// 3. 방 참여 플로우 개선
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { useEffect, useRef, useState, useId, useCallback } from "react";
 import * as Y from "yjs";
-import { WebrtcProvider } from "y-webrtc";
+import { WebsocketProvider } from "y-websocket";
 import { Users, Palette, Wifi, WifiOff, Copy, Hash, Share } from "lucide-react";
 import { BackButton } from "../components/common/BackButton";
 import type { Route } from "../types";
@@ -148,9 +145,9 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
 
   // Y.js 상태
   const ydocRef = useRef<Y.Doc | null>(null);
-  const providerRef = useRef<WebrtcProvider | null>(null);
+  const providerRef = useRef<WebsocketProvider | null>(null);
   const drawingArrayRef = useRef<Y.Array<DrawData> | null>(null);
-  const awarenessRef = useRef<WebrtcProvider["awareness"] | null>(null);
+  const awarenessRef = useRef<WebsocketProvider["awareness"] | null>(null);
 
   // UI 상태 - 수정된 부분
   const [roomId, setRoomId] = useState<string>("");
@@ -184,13 +181,27 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
   };
 
   const renderStroke = useCallback((drawData: DrawData): void => {
+    console.log("=== renderStroke 시작 ===");
+    console.log("받은 데이터:", drawData);
+
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!canvas) {
+      console.error("캔버스를 찾을 수 없음!");
+      return;
+    }
+    console.log("캔버스 존재:", canvas);
 
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      console.error("2D 컨텍스트를 가져올 수 없음!");
+      return;
+    }
+    console.log("컨텍스트 존재:", ctx);
 
     const dpr = Math.max(1, window.devicePixelRatio || 1);
+    console.log("DPR:", dpr);
+    console.log("캔버스 크기:", canvas.width, "x", canvas.height);
+    console.log("그릴 좌표:", drawData.x * dpr, drawData.y * dpr);
 
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
@@ -199,19 +210,45 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
     if (drawData.tool === "pen") {
       ctx.globalCompositeOperation = "source-over";
       ctx.strokeStyle = drawData.color;
+      console.log(
+        "펜 모드 - 색상:",
+        drawData.color,
+        "브러시:",
+        drawData.brushSize
+      );
     } else {
       ctx.globalCompositeOperation = "destination-out";
+      console.log("지우개 모드");
     }
 
     ctx.beginPath();
     if (drawData.prevX !== undefined && drawData.prevY !== undefined) {
       ctx.moveTo(drawData.prevX * dpr, drawData.prevY * dpr);
+      console.log("이동:", drawData.prevX * dpr, drawData.prevY * dpr);
     }
     ctx.lineTo(drawData.x * dpr, drawData.y * dpr);
     ctx.stroke();
+
+    console.log("렌더링 완료");
+    console.log("=== renderStroke 완료 ===");
   }, []);
 
   // ✅ 수정된 Y.js 초기화 - 더 안정적인 연결 처리
+  // Y.js 디버깅을 위한 코드 추가 - initializeYjs 함수 내부에 추가
+
+  const clearCanvas = useCallback((): void => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    ctx.fillStyle = "#1f2937";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    drawGrid(ctx, rect.width, rect.height);
+  }, []);
+
   const initializeYjs = useCallback(
     (roomName: string): void => {
       console.log(`Y.js 초기화 시작: ${roomName}`);
@@ -227,17 +264,15 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       const ydoc = new Y.Doc();
       ydocRef.current = ydoc;
 
-      const provider = new WebrtcProvider(roomName, ydoc, {
-        signaling: [
-          "wss://signaling.yjs.dev",
-          "wss://y-webrtc-signaling-eu.herokuapp.com",
-          "wss://y-webrtc-signaling-us.herokuapp.com",
-        ],
-        password: undefined,
-        // 더 안정적인 WebRTC 설정
-        maxConns: 20,
-        filterBcConns: true,
-      });
+      // ✅ WebsocketProvider 사용 (WebrtcProvider 대신)
+      const provider = new WebsocketProvider(
+        "wss://demos.yjs.dev/ws", // Y.js 공식 웹소켓 서버
+        roomName,
+        ydoc,
+        {
+          connect: true, // 자동 연결
+        }
+      );
 
       providerRef.current = provider;
 
@@ -247,49 +282,107 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       const awareness = provider.awareness;
       awarenessRef.current = awareness;
 
-      // ✅ 연결 상태 이벤트 리스너 개선
-      provider.on("status", (event: { connected: boolean }) => {
-        console.log("Provider 상태 변경:", event.connected);
+      // ✅ WebSocket 이벤트 리스너 (WebRTC와 다름)
+      provider.on("status", (event: { status: string }) => {
+        console.log("WebSocket 상태:", event.status);
 
-        if (event.connected) {
+        if (event.status === "connected") {
           setConnected(true);
-          setConnectionStatus("P2P 연결됨");
+          setConnectionStatus("서버 연결됨");
           setIsJoining(false);
 
-          // ✅ 연결 성공시 다이얼로그 닫기
           setTimeout(() => {
             setShowRoomDialog(false);
           }, 500);
-        } else {
+        } else if (event.status === "connecting") {
+          setConnectionStatus("서버 연결 중...");
+        } else if (event.status === "disconnected") {
           setConnected(false);
-          setConnectionStatus("연결 끊김");
+          setConnectionStatus("서버 연결 끊김");
         }
       });
 
-      // ✅ provider 연결 확인 추가
-      provider.on("synced", () => {
-        console.log("Y.js 문서 동기화 완료");
-        setConnected(true);
-        setConnectionStatus("동기화 완료");
+      // ✅ 수정: 'synced' → 'sync'
+      provider.on("sync", (isSynced: boolean) => {
+        console.log("Y.js 문서 동기화 상태:", isSynced);
+        if (isSynced) {
+          console.log("현재 그림 데이터 수:", drawingArray.length);
+          setConnected(true);
+          setConnectionStatus("동기화 완료");
+
+          // 기존 그림들 다시 그리기
+          const canvas = canvasRef.current;
+          if (canvas) {
+            clearCanvas();
+            drawingArray.toArray().forEach((drawData) => {
+              if (drawData && drawData.userId !== id) {
+                renderStroke(drawData);
+              }
+            });
+          }
+        }
       });
 
-      // 드로잉 데이터 변경 감지
-      drawingArray.observe((event: Y.YArrayEvent<DrawData>) => {
-        event.changes.added.forEach((item) => {
-          const content = item.content.getContent() as DrawData[];
-          content.forEach((drawData) => {
-            if (drawData && drawData.userId !== id) {
-              renderStroke(drawData);
+      // ✅ 추가 이벤트들
+      provider.on("connection-close", () => {
+        console.log("WebSocket 연결 닫힘");
+        setConnected(false);
+        setConnectionStatus("연결 닫힘");
+      });
+
+      provider.on("connection-error", (error: any) => {
+        console.error("WebSocket 연결 오류:", error);
+        setConnected(false);
+        setConnectionStatus("연결 오류");
+      });
+
+      // ✅ 드로잉 데이터 변경 감지 (기존과 동일)
+      // drawingArray.observe((event: Y.YArrayEvent<DrawData>) => {
+      //   console.log("드로잉 배열 변경됨:", event);
+
+      //   event.changes.added.forEach((item) => {
+      //     const content = item.content;
+      //     if (content && content.getContent) {
+      //       const drawDataArray = content.getContent() as DrawData[];
+      //       console.log("추출된 데이터 배열:", drawDataArray);
+
+      //       drawDataArray.forEach((drawData) => {
+      //         if (drawData && drawData.userId !== id) {
+      //           console.log("다른 사용자 그림 렌더링:", drawData.userId);
+      //           renderStroke(drawData);
+      //         }
+      //       });
+      //     }
+      //   });
+      // });
+      // 1. observe 대신 간단한 방법 사용
+      let lastArrayLength = 0;
+
+      ydoc.on("update", () => {
+        const currentLength = drawingArray.length;
+
+        if (currentLength > lastArrayLength) {
+          console.log("🆕 새 그림 데이터 감지!");
+
+          for (let i = lastArrayLength; i < currentLength; i++) {
+            const drawData = drawingArray.get(i);
+
+            if (drawData) {
+              console.log("🖌️  모든 그림 강제 렌더링 (테스트):", drawData);
+              renderStroke(drawData); // ID 비교 없이 모든 그림 렌더링
             }
-          });
-        });
+          }
+
+          lastArrayLength = currentLength;
+        }
       });
 
-      // Awareness 변경 감지
+      // ✅ Awareness 변경 감지 (기존과 동일)
       const updateFromAwareness = (): void => {
         const states = Array.from(
           awareness.getStates().values()
         ) as AwarenessState[];
+        console.log("Awareness 상태 업데이트:", states);
 
         const connectedUsers: UserInfo[] = states
           .filter((state) => state.user)
@@ -319,17 +412,18 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
 
       awareness.on("change", updateFromAwareness);
 
-      // ✅ 내 사용자 정보 설정 - 조금 늦게 설정해서 안정성 확보
+      // ✅ 내 사용자 정보 설정
       setTimeout(() => {
         awareness.setLocalState({
           user: { id, name: userName, color },
         });
+        console.log("내 사용자 정보 설정:", { id, name: userName, color });
         updateFromAwareness();
       }, 100);
 
       console.log(`Y.js 초기화 완료: ${roomName}`);
     },
-    [userName, color, id, renderStroke]
+    [clearCanvas, id, renderStroke, userName, color]
   );
 
   // ✅ 수정된 방 생성
@@ -392,19 +486,6 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
   }, []);
 
   // 나머지 함수들은 기존과 동일
-  const clearCanvas = useCallback((): void => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const rect = canvas.getBoundingClientRect();
-    ctx.fillStyle = "#1f2937";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    drawGrid(ctx, rect.width, rect.height);
-  }, []);
-
   const handleClearAll = useCallback((): void => {
     const drawingArray = drawingArrayRef.current;
     if (!drawingArray) return;
@@ -443,7 +524,18 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
     };
   }, []);
 
-  // 기존 드로잉 이벤트 처리는 동일
+  // 1. saveDrawData 함수 정의 (컴포넌트 내부, useEffect 위에)
+  const saveDrawData = useCallback((drawData: DrawData) => {
+    const drawingArray = drawingArrayRef.current;
+    if (drawingArray) {
+      console.log("드로잉 데이터 저장:", drawData);
+      drawingArray.push([drawData]);
+      console.log("현재 배열 길이:", drawingArray.length);
+      console.log("배열 내용:", drawingArray.toArray());
+    }
+  }, []);
+
+  // 2. 완전한 드로잉 이벤트 핸들러 (useEffect 내부)
   useEffect(() => {
     if (!connected || !canvasRef.current) return;
 
@@ -451,6 +543,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
     let isDrawing = false;
     let lastPoint: { x: number; y: number } | null = null;
 
+    // 마우스/터치 이동 - 커서 위치 업데이트
     const onPointerMove = (e: PointerEvent): void => {
       const point = getPoint(e);
       const awareness = awarenessRef.current;
@@ -462,6 +555,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       }
     };
 
+    // 그리기 시작
     const onPointerDown = (e: PointerEvent): void => {
       isDrawing = true;
       lastPoint = getPoint(e);
@@ -479,19 +573,17 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       };
 
       renderStroke(drawData);
-
-      const drawingArray = drawingArrayRef.current;
-      if (drawingArray) {
-        drawingArray.push([drawData]);
-      }
+      saveDrawData(drawData); // ✅ 수정된 부분
     };
 
+    // 그리기 종료
     const onPointerUp = (e: PointerEvent): void => {
       isDrawing = false;
       lastPoint = null;
       canvas.releasePointerCapture(e.pointerId);
     };
 
+    // 그리기 진행 중
     const onPointerDraw = (e: PointerEvent): void => {
       if (!isDrawing || !lastPoint) return;
 
@@ -511,19 +603,16 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       };
 
       renderStroke(drawData);
-
-      const drawingArray = drawingArrayRef.current;
-      if (drawingArray) {
-        drawingArray.push([drawData]);
-      }
+      saveDrawData(drawData); // ✅ 수정된 부분
 
       lastPoint = point;
     };
 
+    // 이벤트 리스너 등록
     canvas.addEventListener("pointermove", onPointerMove);
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointerup", onPointerUp);
-    canvas.addEventListener("pointercancel", onPointerUp);
+    canvas.addEventListener("pointercancel", onPointerUp); // 터치 취소시에도 그리기 종료
     canvas.addEventListener("pointermove", onPointerDraw);
 
     return () => {
@@ -533,7 +622,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointermove", onPointerDraw);
     };
-  }, [connected, color, brush, tool, id, renderStroke, getPoint]);
+  }, [connected, color, brush, tool, id, renderStroke, getPoint, saveDrawData]);
 
   useEffect(() => {
     return () => {
@@ -555,16 +644,20 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
             <div className="w-16 h-16 bg-gradient-to-r from-green-400 to-emerald-400 rounded-full flex items-center justify-center mx-auto mb-4">
               <Palette className="w-8 h-8 text-white" />
             </div>
-            <h1 className="text-3xl font-bold text-white mb-2">
-              Y.js P2P 화이트보드
+            <h1 className="text-4xl font-bold text-white mb-2 bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text">
+              Y.js 실시간 화이트보드
             </h1>
             <p className="text-gray-400">구글독스 수준의 실시간 협업</p>
 
             {/* ✅ 연결 상태 표시 */}
             {isJoining && (
-              <div className="mt-4 p-3 bg-blue-500/20 border border-blue-500/30 rounded-lg">
-                <div className="flex items-center justify-center gap-2 text-blue-400">
-                  <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+              <div className="flex items-center justify-center gap-6 text-gray-400">
+                <div className="flex items-center gap-2">
+                  {connected ? (
+                    <Wifi className="w-5 h-5 text-green-400" />
+                  ) : (
+                    <WifiOff className="w-5 h-5 text-yellow-400" />
+                  )}
                   <span className="text-sm">{connectionStatus}</span>
                 </div>
               </div>
@@ -662,7 +755,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
 
       <div className="pt-20 max-w-7xl mx-auto">
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2 bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text text-transparent">
+          <h1 className="text-4xl font-bold text-white mb-2 bg-gradient-to-r from-green-400 to-emerald-400 bg-clip-text">
             Y.js P2P 화이트보드
           </h1>
           <div className="flex items-center justify-center gap-6 text-gray-400">
@@ -711,9 +804,9 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
               className="w-full h-full touch-none cursor-crosshair"
             />
 
-            {Array.from(cursors.values()).map((cursor) => (
+            {Array.from(cursors.values()).map((cursor, index) => (
               <div
-                key={cursor.userId}
+                key={`cursor-${cursor.userId}-${index}`} // 고유한 key 생성
                 className="absolute pointer-events-none z-10 transform -translate-x-1 -translate-y-1"
                 style={{
                   left: `${cursor.x}px`,
@@ -796,9 +889,9 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
             <div className="p-4 rounded-xl bg-gray-800 border border-gray-700 shadow-lg">
               <h3 className="mb-3 font-bold text-white">접속 사용자</h3>
               <div className="space-y-2 max-h-32 overflow-y-auto">
-                {users.map((user) => (
+                {users.map((user, index) => (
                   <div
-                    key={user.id}
+                    key={`user-${user.id}-${index}`} // 고유한 key 생성
                     className="flex items-center gap-3 p-2 bg-gray-700/50 rounded-lg"
                   >
                     <div
@@ -826,7 +919,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
               <div className="space-y-1 text-gray-400">
                 <div>상태: {connected ? "🟢 연결됨" : "🟡 연결 중"}</div>
                 <div>사용자: {users.length}명</div>
-                <div className="text-xs opacity-70">Y.js + WebRTC P2P</div>
+                <div className="text-xs opacity-70">Y.js + WebSocket</div>{" "}
               </div>
             </div>
           </aside>
