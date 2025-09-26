@@ -35,7 +35,7 @@ const ParticleSystem: React.FC<ParticleSystemProps> = ({
 
     // 파티클 수 최적화: 100개 → 60개
     particlesRef.current = [];
-    for (let i = 0; i < 60; i++) {
+    for (let i = 0; i < 90; i++) {
       particlesRef.current.push({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
