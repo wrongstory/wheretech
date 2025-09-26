@@ -81,6 +81,24 @@ const userColors: string[] = [
   "#5f27cd",
 ];
 
+function getContrastText(hex: string): string {
+  // #fff, #ffffff 모두 허용
+  const h = hex.replace("#", "");
+  const full =
+    h.length === 3
+      ? h
+          .split("")
+          .map((c) => c + c)
+          .join("")
+      : h;
+  const n = parseInt(full, 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  const luminance = 0.299 * r + 0.587 * g + 0.114 * b; // 0~255
+  return luminance > 150 ? "#000000" : "#ffffff";
+}
+
 // ... (기존 유틸 함수들은 동일)
 function useDprCanvas(canvas: HTMLCanvasElement | null): void {
   useEffect(() => {
@@ -816,28 +834,39 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
               className="w-full h-full touch-none cursor-crosshair"
             />
 
-            {Array.from(cursors.values()).map((cursor, index) => (
-              <div
-                key={`cursor-${cursor.userId}-${index}`} // 고유한 key 생성
-                className="absolute pointer-events-none z-10 transform -translate-x-1 -translate-y-1"
-                style={{
-                  left: `${cursor.x}px`,
-                  top: `${cursor.y}px`,
-                  transition: "all 0.1s ease-out",
-                }}
-              >
+            {Array.from(cursors.values()).map((cursor, index) => {
+              const bg = cursor.userColor || "#374151";
+              const fg = getContrastText(bg);
+
+              return (
                 <div
-                  className="w-4 h-4 rounded-full border-2 border-white shadow-lg"
-                  style={{ backgroundColor: cursor.userColor }}
-                />
-                <div
-                  className="absolute top-5 left-0 text-xs font-bold px-2 py-1 rounded shadow-lg text-white whitespace-nowrap"
-                  style={{ backgroundColor: cursor.userColor }}
+                  key={`cursor-${cursor.userId}-${index}`}
+                  className="absolute pointer-events-none z-10"
+                  style={{
+                    left: `${cursor.x + 10}px`,
+                    top: `${cursor.y - 5}px`,
+                    transition: "all 0.1s ease-out",
+                  }}
                 >
-                  {cursor.userName}
+                  <div
+                    className="text-xs font-bold px-2 py-1 rounded shadow-lg whitespace-nowrap"
+                    style={{
+                      backgroundColor: bg,
+                      color: fg,
+                      // 가독성 강화(흰 배경일 때 테두리 보강)
+                      border:
+                        fg === "#000000"
+                          ? "1px solid rgba(0,0,0,0.2)"
+                          : "1px solid rgba(255,255,255,0.3)",
+                      textShadow:
+                        fg === "#ffffff" ? "0 1px 2px rgba(0,0,0,0.7)" : "none",
+                    }}
+                  >
+                    {cursor.userName || "Unknown User"}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* 도구 패널 - 기존과 동일하지만 간략화 */}
