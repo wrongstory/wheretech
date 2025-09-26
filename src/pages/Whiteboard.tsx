@@ -233,13 +233,6 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       // awareness 가져오기
       const awareness = provider.awareness;
 
-      // 사용자 상태 설정
-      awareness.setLocalState({
-        name: userName,
-        color: color,
-        id: id,
-      });
-
       providerRef.current = provider;
 
       // 공유 배열 생성 (모든 드로잉 데이터)
@@ -275,26 +268,25 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       });
 
       // 사용자 Awareness 변경 감지 (커서, 사용자 목록)
-      awareness.on("change", () => {
+      const updateFromAwareness = () => {
         const states = Array.from(
           awareness.getStates().values()
         ) as AwarenessState[];
 
         // 사용자 목록 업데이트
         const connectedUsers: UserInfo[] = states
-          .filter((state: AwarenessState) => state.user)
-          .map((state: AwarenessState) => ({
+          .filter((state) => state.user)
+          .map((state) => ({
             id: state.user!.id,
             name: state.user!.name,
             color: state.user!.color,
             lastSeen: Date.now(),
           }));
-
         setUsers(connectedUsers);
 
         // 커서 위치 업데이트
         const cursorMap = new Map<string, CursorData>();
-        states.forEach((state: AwarenessState) => {
+        states.forEach((state) => {
           if (state.cursor && state.user && state.user.id !== id) {
             cursorMap.set(state.user.id, {
               type: "cursor",
@@ -307,7 +299,15 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
           }
         });
         setCursors(cursorMap);
+      };
+      awareness.on("change", updateFromAwareness);
+
+      // ✅ 리스너 등록 이후에 내 상태 세팅 (초기에도 목록에 보이도록)
+      awareness.setLocalState({
+        user: { id, name: userName, color },
       });
+      // 그리고 한 번 즉시 반영
+      updateFromAwareness();
 
       console.log(`Y.js 초기화 완료: 방 ${roomName}`);
     },
