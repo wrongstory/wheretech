@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { useEffect, useRef, useState, useId, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import * as Y from "yjs";
 import { WebsocketProvider } from "y-websocket";
 import { Users, Palette, Wifi, WifiOff, Copy, Hash, Share } from "lucide-react";
@@ -130,6 +130,10 @@ const drawGrid = (
   ctx.stroke();
 };
 
+const generateUniqueId = () => {
+  return `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+};
+
 const generateUsername = (): string => {
   const adjectives = ["Creative", "Artistic", "Dynamic", "Bright", "Swift"];
   const nouns = ["Designer", "Developer", "Artist", "Creator", "Maker"];
@@ -140,7 +144,7 @@ const generateUsername = (): string => {
 };
 
 const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
-  const id = useId().replace(/[:]/g, "");
+  const [userId] = useState(() => generateUniqueId());
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Y.js 상태
@@ -315,7 +319,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
           if (canvas) {
             clearCanvas();
             drawingArray.toArray().forEach((drawData) => {
-              if (drawData && drawData.userId !== id) {
+              if (drawData && drawData.userId !== userId) {
                 renderStroke(drawData);
               }
             });
@@ -336,25 +340,6 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
         setConnectionStatus("연결 오류");
       });
 
-      // ✅ 드로잉 데이터 변경 감지 (기존과 동일)
-      // drawingArray.observe((event: Y.YArrayEvent<DrawData>) => {
-      //   console.log("드로잉 배열 변경됨:", event);
-
-      //   event.changes.added.forEach((item) => {
-      //     const content = item.content;
-      //     if (content && content.getContent) {
-      //       const drawDataArray = content.getContent() as DrawData[];
-      //       console.log("추출된 데이터 배열:", drawDataArray);
-
-      //       drawDataArray.forEach((drawData) => {
-      //         if (drawData && drawData.userId !== id) {
-      //           console.log("다른 사용자 그림 렌더링:", drawData.userId);
-      //           renderStroke(drawData);
-      //         }
-      //       });
-      //     }
-      //   });
-      // });
       // 1. observe 대신 간단한 방법 사용
       let lastArrayLength = 0;
 
@@ -362,14 +347,28 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
         const currentLength = drawingArray.length;
 
         if (currentLength > lastArrayLength) {
-          console.log("🆕 새 그림 데이터 감지!");
+          console.log(`새 그림 데이터: ${lastArrayLength} → ${currentLength}`);
+          console.log(`내 사용자 ID: "${userId}"`); // 디버깅용
 
           for (let i = lastArrayLength; i < currentLength; i++) {
             const drawData = drawingArray.get(i);
+            console.log(`항목 ${i} 처리:`, drawData);
+            console.log(`데이터의 userId: "${drawData?.userId}"`);
+            console.log(
+              `ID 비교: "${drawData?.userId}" !== "${userId}" = ${
+                drawData?.userId !== userId
+              }`
+            );
 
-            if (drawData) {
-              console.log("🖌️  모든 그림 강제 렌더링 (테스트):", drawData);
-              renderStroke(drawData); // ID 비교 없이 모든 그림 렌더링
+            if (drawData && drawData.userId !== userId) {
+              // id 대신 userId 사용
+              console.log("다른 사용자 그림 - 렌더링 시작:", drawData.userId);
+              renderStroke(drawData);
+            } else if (drawData && drawData.userId === userId) {
+              // id 대신 userId 사용
+              console.log("내 그림 - 렌더링 스킵");
+            } else {
+              console.log("데이터 없음 또는 이상함:", drawData);
             }
           }
 
@@ -396,7 +395,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
 
         const cursorMap = new Map<string, CursorData>();
         states.forEach((state) => {
-          if (state.cursor && state.user && state.user.id !== id) {
+          if (state.cursor && state.user && state.user.id !== userId) {
             cursorMap.set(state.user.id, {
               type: "cursor",
               x: state.cursor.x,
@@ -415,15 +414,19 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       // ✅ 내 사용자 정보 설정
       setTimeout(() => {
         awareness.setLocalState({
-          user: { id, name: userName, color },
+          user: { id: userId, name: userName, color },
         });
-        console.log("내 사용자 정보 설정:", { id, name: userName, color });
+        console.log("내 사용자 정보 설정:", {
+          id: userId,
+          name: userName,
+          color,
+        });
         updateFromAwareness();
       }, 100);
 
       console.log(`Y.js 초기화 완료: ${roomName}`);
     },
-    [clearCanvas, id, renderStroke, userName, color]
+    [clearCanvas, renderStroke, userId, userName, color]
   );
 
   // ✅ 수정된 방 생성
@@ -568,7 +571,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
         color,
         brushSize: brush,
         tool,
-        userId: id,
+        userId: userId, // id 대신 userId 사용
         timestamp: Date.now(),
       };
 
@@ -598,7 +601,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
         color,
         brushSize: brush,
         tool,
-        userId: id,
+        userId: userId, // id 대신 userId 사용
         timestamp: Date.now(),
       };
 
@@ -622,7 +625,16 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
       canvas.removeEventListener("pointercancel", onPointerUp);
       canvas.removeEventListener("pointermove", onPointerDraw);
     };
-  }, [connected, color, brush, tool, id, renderStroke, getPoint, saveDrawData]);
+  }, [
+    connected,
+    color,
+    brush,
+    tool,
+    renderStroke,
+    getPoint,
+    saveDrawData,
+    userId,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -900,7 +912,7 @@ const Whiteboard: React.FC<WhiteboardProps> = ({ onNavigate }) => {
                     />
                     <span className="text-sm text-white flex-1">
                       {user.name}
-                      {user.id === id && " (나)"}
+                      {user.id === userId && " (나)"}
                     </span>
                   </div>
                 ))}
